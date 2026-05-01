@@ -7,6 +7,12 @@ __pycache__/
 .env
 .venv
 
+# Trained model since it is too big
+.trained_model/*
+trained_model/
+.venv
+
+
 # Distribution / packaging
 .Python
 build/
