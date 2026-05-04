@@ -234,10 +234,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input, Conv1D, MaxPooling1D, Bidirectional, RepeatVector, TimeDistributed, Flatten
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 import matplotlib
-import matplotlib.pyplot as plt
 
 # --- 1. GPU LINKING (DO NOT REMOVE) ---
 venv_base = os.path.dirname(sys.executable)
@@ -256,238 +255,207 @@ else:
     print("SUCCESS: RTX 4050 detected and ready.")
 
 # --- 2. DATA PROCESSING FUNCTIONS ---
-
 def load_and_clean_data(file_path):
     df = pd.read_csv(file_path)
     df['Date'] = pd.to_datetime(df['Date'], dayfirst=True)
+    
+    # FIX: Remove rows with the same timestamp before setting the index
+    df = df.drop_duplicates(subset='Date')
+    
     df.set_index('Date', inplace=True)
-    df = df.ffill() #
+    df = df.sort_index() # Essential for time-series shifting
+    df = df.ffill() 
     return df
 
-def add_calendar_features(df):
+def add_engineered_features(df):
     df['hour'] = df.index.hour
     df['day_of_week'] = df.index.dayofweek
+    df['Net_Load_BE'] = df['Load_BE'] - (df['Wind_BE'] + df['Solar_BE'])
+    df['FR_Balance'] = df['Load_FR'] - df['Gen_FR']
+    
+    # Momentum features
+    df['Price_Diff'] = df['Price_BE'].diff().bfill() 
+    df['Price_MA_6'] = df['Price_BE'].rolling(window=6).mean().bfill() 
+    df['Price_MA_24'] = df['Price_BE'].rolling(window=24).mean().bfill()
+    
     return df
 
-def create_lags(df, target_col='Price_BE', lags=[1, 2, 24, 168]):
+def create_lags(df, target_col='Price_BE', lags=[1, 2, 24]):
+    cols_to_lag = [c for c in df.columns if 'lag' not in c and c != target_col]
+    for col in cols_to_lag:
+        for lag in lags:
+            df[f'{col}_lag_{lag}'] = df[col].shift(lag)
     for lag in lags:
-        df[f'{target_col}_lag_{lag}'] = df[target_col].shift(lag) #
+        df[f'{target_col}_lag_{lag}'] = df[target_col].shift(lag)
     df.dropna(inplace=True)
     return df
 
-def split_data(df):
-    n = len(df)
-    train_df = df[0:int(n*0.8)]
-    val_df = df[int(n*0.8):int(n*0.9)]
-    test_df = df[int(n*0.9):] #
+# --- MODIFIED: EXACT 72H TEST SPLIT ---
+def split_data_final_72h(df, look_back=168, forecast_horizon=72):
+    """
+    Ensures the test set is exactly the final 72-hour sequence.
+    """
+    # The last sequence requires the last 168h of input + 72h of target
+    test_df = df.iloc[-(look_back + forecast_horizon):]
+    
+    # Training and Validation come from everything BEFORE those final 72 targets
+    train_val_df = df.iloc[:-(forecast_horizon)]
+    
+    n = len(train_val_df)
+    train_df = train_val_df.iloc[:int(n*0.9)]
+    val_df = train_val_df.iloc[int(n*0.9):]
+    
     return train_df, val_df, test_df
 
 def scale_data(train_df, val_df, test_df, target_col='Price_BE'):
     scaler_X = StandardScaler()
     scaler_y = StandardScaler()
-    
-    # Scale features
     scaler_X.fit(train_df)
     train_s = scaler_X.transform(train_df)
     val_s = scaler_X.transform(val_df)
     test_s = scaler_X.transform(test_df)
-    
-    # Scale target separately for easy inverse transform later
     scaler_y.fit(train_df[[target_col]])
-    
     return train_s, val_s, test_s, scaler_y
 
 def create_sequences(data, target_idx, look_back=168, forecast_horizon=72):
     X, y = [], []
     for i in range(len(data) - look_back - forecast_horizon + 1):
         X.append(data[i : (i + look_back), :])
-        y.append(data[(i + look_back) : (i + look_back + forecast_horizon), target_idx]) #
+        y.append(data[(i + look_back) : (i + look_back + forecast_horizon), target_idx]) 
     return np.array(X), np.array(y)
 
 # --- 3. MODEL ARCHITECTURE ---
 
 def build_lstm_model(input_shape, output_steps):
+    from tensorflow.keras.optimizers import Adam
     model = Sequential([
-        LSTM(units=64, input_shape=input_shape, return_sequences=False), #[cite: 1]
-        Dropout(0.2),
-        Dense(units=output_steps) # Output 72 hours at once[cite: 2]
+        Input(shape=input_shape),
+        Conv1D(filters=128, kernel_size=3, activation='relu', padding='same'),
+        
+        Bidirectional(LSTM(128, return_sequences=False)),
+        Dropout(0.1),
+        RepeatVector(output_steps),
+        LSTM(64, return_sequences=True),
+        Dropout(0.05),
+        TimeDistributed(Dense(1)),
+        Flatten()
     ])
-    model.compile(optimizer='adam', loss='mse') # Evaluated on MSE[cite: 2]
+    model.compile(optimizer=Adam(learning_rate=0.00075), loss='mse')
     return model
 
-# --- 4. VISUALIZATION POPUP ---
-
-def visualize_test_performance(model, X_test, y_test, scaler_y):
-    # Pick a random 72-hour window from the test set to visualize
-    idx = np.random.randint(0, len(X_test))
-    sample_X = np.expand_dims(X_test[idx], axis=0)
-    
-    # Predict and inverse scale
-    scaled_pred = model.predict(sample_X)
-    actual_prices = scaler_y.inverse_transform(y_test[idx].reshape(1, -1)).flatten()
-    pred_prices = scaler_y.inverse_transform(scaled_pred).flatten()
-    
-    # Create the Popup Graph
-    plt.figure(figsize=(12, 6))
-    plt.plot(actual_prices, label='Actual Price (BE)', color='black', linewidth=2)
-    plt.plot(pred_prices, label='LSTM 72h Forecast', color='blue', linestyle='--', linewidth=2)
-    plt.title(f'72-Hour Forecast vs Actual Data (Test Set Sample)')
-    plt.xlabel('Hours into Future')
-    plt.ylabel('Price [EUR/MWh]')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.show() # This creates the popup!
-
-def play_finished_sound():
-    sound_file = "/usr/share/sounds/gnome/default/alerts/glass.ogg"
-    if os.path.exists(sound_file):
-        os.system(f"paplay {sound_file}")
-    else:
-        print('\a Training complete!')
+# --- 4. VISUALIZATION & UTILITIES ---
 
 def save_trained_model(model, filename='sds_lstm_model.keras'):
-    # Saves the model architecture, weights, and training configuration
     model.save(filename)
     print(f"Model saved successfully as '{filename}'")
 
 def load_existing_model(filename='sds_lstm_model.keras'):
-    # Loads the model back into memory exactly as it was
     if os.path.exists(filename):
-        model = tf.keras.models.load_model(filename)
-        print(f"Model '{filename}' loaded successfully!")
-        return model
-    else:
-        print(f"Error: '{filename}' not found.")
-        return None
+        return tf.keras.models.load_model(filename)
+    return None
     
-import os
-import matplotlib
-# CRITICAL: Use 'Agg' to avoid the display connection crash on Fedora
+# Headless Plotting Fix
 matplotlib.use('Agg') 
-import matplotlib.pyplot as plt
-
-# Create the directory for your report pictures if it doesn't exist
 PLOT_DIR = "plots"
 os.makedirs(PLOT_DIR, exist_ok=True)
 
-# --- Updated Visualization Functions (Saving to Directory) ---
-
-def visualize_test_performance(model, X_test, y_test, scaler_y):
-    idx = np.random.randint(0, len(X_test))
-    sample_X = np.expand_dims(X_test[idx], axis=0)
-    
-    scaled_pred = model.predict(sample_X)
-    actual_prices = scaler_y.inverse_transform(y_test[idx].reshape(1, -1)).flatten()
-    pred_prices = scaler_y.inverse_transform(scaled_pred).flatten()
-    
-    plt.figure(figsize=(12, 6))
-    plt.plot(actual_prices, label='Actual Price (BE)', color='black', linewidth=2)
-    plt.plot(pred_prices, label='LSTM 72h Forecast', color='blue', linestyle='--', linewidth=2)
-    plt.title(f'Sample 72-Hour Forecast vs Actual')
-    plt.xlabel('Hours into Future')
-    plt.ylabel('Price [EUR/MWh]')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # Save to the new directory
-    save_path = os.path.join(PLOT_DIR, 'sample_test_forecast.png')
-    plt.savefig(save_path, dpi=300)
-    print(f"Saved: {save_path}")
-    plt.close() # Always close to free up GPU/System memory
-
 def plot_learning_curve(history):
     plt.figure(figsize=(10, 5))
-    plt.plot(history.history['loss'], label='Training Loss (MSE)', color='blue')
-    plt.plot(history.history['val_loss'], label='Validation Loss (MSE)', color='orange')
-    plt.title('Model Learning Curve: Training vs. Validation Loss')
-    plt.xlabel('Epochs')
-    plt.ylabel('Mean Squared Error')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.7)
-    
-    save_path = os.path.join(PLOT_DIR, 'learning_curve.png')
-    plt.savefig(save_path, dpi=300)
-    print(f"Saved: {save_path}")
-    plt.close()
+    plt.plot(history.history['loss'], label='Train Loss', color='blue')
+    plt.plot(history.history['val_loss'], label='Val Loss', color='orange')
+    plt.title('Learning Curve')
+    plt.legend(); plt.grid(True)
+    plt.savefig(os.path.join(PLOT_DIR, 'learning_curve.png')); plt.close()
 
 def plot_detailed_evaluation(model, X_data, y_data_scaled, scaler_y, set_name="Validation"):
     scaled_predictions = model.predict(X_data)
     actual_prices = scaler_y.inverse_transform(y_data_scaled)
     predicted_prices = scaler_y.inverse_transform(scaled_predictions)
     
-    # 1. Plot: Actual vs Predicted
     plt.figure(figsize=(15, 6))
-    plt.plot(actual_prices[:168, 0], label='Actual Price', color='black', alpha=0.7)
-    plt.plot(predicted_prices[:168, 0], label='Predicted Price', color='blue', linestyle='--')
-    plt.title(f'{set_name} Set: 1-Week Forecast Comparison')
-    plt.xlabel('Hours')
-    plt.ylabel('Price [EUR/MWh]')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    save_path = os.path.join(PLOT_DIR, f'forecast_{set_name}.png')
-    plt.savefig(save_path, dpi=300)
-    print(f"Saved: {save_path}")
-    plt.close()
-
-    # 2. Plot: Error Distribution
-    errors = actual_prices - predicted_prices
-    plt.figure(figsize=(10, 5))
-    plt.hist(errors.flatten(), bins=50, color='red', alpha=0.6)
-    plt.title(f'{set_name} Set: Error Distribution')
-    plt.xlabel('Price Error [EUR/MWh]')
-    plt.ylabel('Frequency')
-    plt.grid(True, alpha=0.3)
-    
-    save_path = os.path.join(PLOT_DIR, f'residuals_{set_name}.png')
-    plt.savefig(save_path, dpi=300)
-    print(f"Saved: {save_path}")
-    plt.close()
+    plt.plot(actual_prices[:168, 0], label='Actual', color='black', alpha=0.7)
+    plt.plot(predicted_prices[:168, 0], label='Predicted', color='blue', linestyle='--')
+    plt.title(f'{set_name}: Forecast Comparison')
+    plt.legend(); plt.grid(True)
+    plt.savefig(os.path.join(PLOT_DIR, f'forecast_{set_name}.png')); plt.close()
 
     mse = np.mean((actual_prices - predicted_prices)**2)
     print(f"--- {set_name} MSE: {mse:.4f} ---")
 
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 
+def calculate_baselines(df, test_df):
+    # Ensure the full price series has a unique index to prevent reindexing errors
+    full_prices = df['Price_BE'][~df.index.duplicated(keep='first')]
+    
+    # We use the ENTIRE test set to match the standard baseline calculation
+    test_actual = test_df['Price_BE']
+    test_index = test_actual.index.drop_duplicates(keep='first')
+    
+    # Reindex using the unique test index
+    daily_pred = full_prices.shift(24).reindex(test_index)
+    weekly_pred = full_prices.shift(168).reindex(test_index)
+    avg_pred = full_prices.rolling(window=168).mean().shift(1).reindex(test_index)
+    
+    # Create a DataFrame to easily drop any remaining NaNs
+    results = pd.DataFrame({
+        'Actual': test_actual[~test_actual.index.duplicated(keep='first')],
+        'Daily': daily_pred,
+        'Weekly': weekly_pred,
+        'Avg': avg_pred
+    }).dropna()
+
+    def get_metrics(true, pred):
+        mse = mean_squared_error(true, pred)
+        mae = mean_absolute_error(true, pred)
+        return mse, mae
+
+    mse_d, mae_d = get_metrics(results['Actual'], results['Daily'])
+    mse_w, mae_w = get_metrics(results['Actual'], results['Weekly'])
+    mse_a, mae_a = get_metrics(results['Actual'], results['Avg'])
+
+    print("\n--- Standard Baseline Scores (Full Test Set) ---")
+    print(f"Daily persistence 72h -> MSE: {mse_d:.4f}, MAE: {mae_d:.4f}")
+    print(f"Weekly persistence 72h -> MSE: {mse_w:.4f}, MAE: {mae_w:.4f}")
+    print(f"Recent weekly average 72h -> MSE: {mse_a:.4f}, MAE: {mae_a:.4f}")
 
 # --- 5. MAIN EXECUTION FLOW ---
 
-# Load and Prepare
 data = load_and_clean_data("Full_Dataset.csv")
-data = add_calendar_features(data)
+data = add_engineered_features(data)
 data = create_lags(data)
 
-# Split and Scale
-train, val, test = split_data(data)
+# Splitting specifically for exactly 72h test sequence
+train, val, test = split_data_final_72h(data)
 target_idx = train.columns.get_loc('Price_BE')
 train_s, val_s, test_s, scaler_y = scale_data(train, val, test)
 
-# Create Sequences
 X_train, y_train = create_sequences(train_s, target_idx)
 X_val, y_val = create_sequences(val_s, target_idx)
-X_test, y_test = create_sequences(test_s, target_idx)
+X_test, y_test = create_sequences(test_s, target_idx) # Should produce 1 sequence
 
 model_file = 'sds_lstm_model.keras'
-
 if os.path.exists(model_file):
-    # Skip training and load the existing one
-    print("-------------------skipping training--------------------------")
+    print("Skipping training, loading existing model...")
     my_model = load_existing_model(model_file)
 else:
-    # Build and train because no saved model exists
     my_model = build_lstm_model(input_shape=(X_train.shape[1], X_train.shape[2]), output_steps=72)
-    early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+    early_stop = EarlyStopping(monitor='val_loss', patience=8, restore_best_weights=True)
+    lr_scheduler = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=4, verbose=1)
     
     print("Starting fresh training...")
     history = my_model.fit(X_train, y_train, validation_data=(X_val, y_val), 
-                           epochs=50, batch_size=32, callbacks=[early_stop])
-    
+                           epochs=100, batch_size=32, callbacks=[early_stop, lr_scheduler])
     plot_learning_curve(history)
-    # Save it immediately after training finishes
     save_trained_model(my_model, model_file)
 
-# Now you can visualize or predict instantly
-visualize_test_performance(my_model, X_test, y_test, scaler_y)
-# --- Call this in your main flow ---
+# Evaluate
 plot_detailed_evaluation(my_model, X_val, y_val, scaler_y, "Validation")
-plot_detailed_evaluation(my_model, X_test, y_test, scaler_y, "Test")
-play_finished_sound()
+# For the test set, we only have 1 sequence, so we print its specific MSE
+test_preds = my_model.predict(X_test)
+test_actual = scaler_y.inverse_transform(y_test)
+test_predicted = scaler_y.inverse_transform(test_preds)
+print(f"--- FINAL 72H TEST MSE: {np.mean((test_actual - test_predicted)**2):.4f} ---")
+
+calculate_baselines(data, test)
+print("All tasks complete! Check the 'plots' folder for results.")
