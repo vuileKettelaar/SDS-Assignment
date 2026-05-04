@@ -360,6 +360,15 @@ wheels = [
 ]
 
 [[package]]
+name = "colour"
+version = "0.1.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a0/d4/5911a7618acddc3f594ddf144ecd8a03c29074a540f4494670ad8f153efe/colour-0.1.5.tar.gz", hash = "sha256:af20120fefd2afede8b001fbef2ea9da70ad7d49fafdb6489025dae8745c3aee", size = 24776, upload-time = "2017-11-19T23:20:08.015Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/74/46/e81907704ab203206769dee1385dc77e1407576ff8f50a0681d0a6b541be/colour-0.1.5-py2.py3-none-any.whl", hash = "sha256:33f6db9d564fadc16e59921a56999b79571160ce09916303d35346dddc17978c", size = 23772, upload-time = "2017-11-19T23:20:04.56Z" },
+]
+
+[[package]]
 name = "comm"
 version = "0.2.3"
 source = { registry = "https://pypi.org/simple" }
@@ -537,6 +546,23 @@ wheels = [
 ]
 
 [[package]]
+name = "dtreeviz"
+version = "2.3.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colour" },
+    { name = "graphviz" },
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "scikit-learn" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9c/07/85c7f7e5d25fef6281d7a89ac097271885e7d288628a591ca3ce38a40b03/dtreeviz-2.3.2.tar.gz", hash = "sha256:d8413a01373237150fcccb763e469384fbd055a627517d77dbb0190a1403f059", size = 88000, upload-time = "2026-01-02T18:40:18.407Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0a/59/3de94d59b3312e39d4b93295262d8f4516e8871864427035b1a9c77be93c/dtreeviz-2.3.2-py3-none-any.whl", hash = "sha256:df68982726d47fcaa1f0f7306a5a550504697c4681c4245dd5ab2ddba0e270bd", size = 102302, upload-time = "2026-01-02T18:40:16.943Z" },
+]
+
+[[package]]
 name = "executing"
 version = "2.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -639,6 +665,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/35/4a/0bd53b36ff0323d10d5f24ebd67af2de10a1117f5cf4d7add90df92756f1/google-pasta-0.2.0.tar.gz", hash = "sha256:c9f2c8dfc8f96d0d5808299920721be30c9eec37f2389f28904f454565c8a16e", size = 40430, upload-time = "2020-03-13T18:57:50.34Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a3/de/c648ef6835192e6e2cc03f40b19eeda4382c49b5bafb43d88b931c4c74ac/google_pasta-0.2.0-py3-none-any.whl", hash = "sha256:b32482794a366b5366a32c92a9a9201b107821889935a02b3e51f6b432ea84ed", size = 57471, upload-time = "2020-03-13T18:57:48.872Z" },
+]
+
+[[package]]
+name = "graphviz"
+version = "0.21"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/b3/3ac91e9be6b761a4b30d66ff165e54439dcd48b83f4e20d644867215f6ca/graphviz-0.21.tar.gz", hash = "sha256:20743e7183be82aaaa8ad6c93f8893c923bd6658a04c32ee115edb3c8a835f78", size = 200434, upload-time = "2025-06-15T09:35:05.824Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/91/4c/e0ce1ef95d4000ebc1c11801f9b944fa5910ecc15b5e351865763d8657f8/graphviz-0.21-py3-none-any.whl", hash = "sha256:54f33de9f4f911d7e84e4191749cac8cc5653f815b06738c54db9a15ab8b1e42", size = 47300, upload-time = "2025-06-15T09:35:04.433Z" },
 ]
 
 [[package]]
@@ -2618,21 +2653,25 @@ name = "sds-environment"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "dtreeviz" },
     { name = "jupyter" },
     { name = "jupyter-console" },
     { name = "matplotlib" },
     { name = "pmdarima" },
     { name = "statsmodels" },
+    { name = "supertree" },
     { name = "tensorflow" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "dtreeviz", specifier = ">=2.3.2" },
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "jupyter-console", specifier = ">=6.6.3" },
     { name = "matplotlib", specifier = ">=3.10.9" },
     { name = "pmdarima", specifier = ">=2.1.1" },
     { name = "statsmodels", specifier = ">=0.14.6" },
+    { name = "supertree", specifier = ">=0.5.5" },
     { name = "tensorflow", specifier = ">=2.21.0" },
 ]
 
@@ -2724,6 +2763,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0f/36/4d44f7035ab3c0b2b6a4c4ebb98dedf36246ccbc1b3e2f51ebcd7ac83abb/statsmodels-0.14.6-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:a518d3f9889ef920116f9fa56d0338069e110f823926356946dae83bc9e33e19", size = 10363350, upload-time = "2025-12-05T23:13:53.08Z" },
     { url = "https://files.pythonhosted.org/packages/26/33/f1652d0c59fa51de18492ee2345b65372550501ad061daa38f950be390b6/statsmodels-0.14.6-cp314-cp314-win_amd64.whl", hash = "sha256:151b73e29f01fe619dbce7f66d61a356e9d1fe5e906529b78807df9189c37721", size = 9588010, upload-time = "2025-12-05T23:14:07.28Z" },
 ]
+
+[[package]]
+name = "supertree"
+version = "0.5.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ipython" },
+    { name = "ipywidgets" },
+    { name = "numpy" },
+    { name = "pandas" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/81/56/6a401b472a97035378992850abc8ff28315a9670ee61de1f1df07665fa60/supertree-0.5.5.tar.gz", hash = "sha256:638cdaa6f6ceb5e5dc2b5b675da540907ee20a2e5ed5eccc86434d4d5b1ca6c0", size = 321490, upload-time = "2025-01-20T09:46:56.644Z" }
 
 [[package]]
 name = "tensorflow"
