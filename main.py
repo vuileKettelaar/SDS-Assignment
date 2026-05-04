@@ -268,8 +268,16 @@ def load_and_clean_data(file_path):
     return df
 
 def add_engineered_features(df):
+    # Standard time features
     df['hour'] = df.index.hour
     df['day_of_week'] = df.index.dayofweek
+    
+    # NEW: Cyclical Time Encoding 
+    # Transforms the 0-23 hour cycle into a continuous wave
+    df['Hour_Sin'] = np.sin(df.index.hour * (2. * np.pi / 24))
+    df['Hour_Cos'] = np.cos(df.index.hour * (2. * np.pi / 24))
+    
+    # Grid interaction features
     df['Net_Load_BE'] = df['Load_BE'] - (df['Wind_BE'] + df['Solar_BE'])
     df['FR_Balance'] = df['Load_FR'] - df['Gen_FR']
     
@@ -277,6 +285,9 @@ def add_engineered_features(df):
     df['Price_Diff'] = df['Price_BE'].diff().bfill() 
     df['Price_MA_6'] = df['Price_BE'].rolling(window=6).mean().bfill() 
     df['Price_MA_24'] = df['Price_BE'].rolling(window=24).mean().bfill()
+    
+    # Ensure external grid data is treated as features
+    # These are already in your df: 'Load_FR', 'Gen_FR', 'Price_CH'
     
     return df
 
@@ -352,21 +363,35 @@ def calculate_baselines(df, test_df):
 
 # --- 3. MODEL ARCHITECTURE ---
 
+from tensorflow.keras.losses import Huber
+
 def build_lstm_model(input_shape, output_steps):
     from tensorflow.keras.optimizers import Adam
     model = Sequential([
         Input(shape=input_shape),
+        # Initial spatial pattern extraction
         Conv1D(filters=128, kernel_size=3, activation='relu', padding='same'),
         
+        # NEW: Increased capacity Bidirectional layer
         Bidirectional(LSTM(128, return_sequences=False)),
-        Dropout(0.1),
+        Dropout(0.2),
+        
         RepeatVector(output_steps),
+        
+        # Decoding layer
         LSTM(64, return_sequences=True),
-        Dropout(0.05),
+        Dropout(0.1),
+        
         TimeDistributed(Dense(1)),
         Flatten()
     ])
-    model.compile(optimizer=Adam(learning_rate=0.00075), loss='mse')
+    
+    # NEW: Huber Loss for training, while still monitoring MSE as a metric
+    model.compile(
+        optimizer=Adam(learning_rate=0.00075), 
+        loss=Huber(delta=1.0), 
+        metrics=['mse', 'mae']
+    )
     return model
 
 # --- 4. VISUALIZATION & UTILITIES ---
