@@ -324,6 +324,32 @@ def create_sequences(data, target_idx, look_back=168, forecast_horizon=72):
         y.append(data[(i + look_back) : (i + look_back + forecast_horizon), target_idx]) 
     return np.array(X), np.array(y)
 
+def calculate_baselines(df, test_df):
+    # Ensure the full price series has a unique index
+    full_prices = df['Price_BE'][~df.index.duplicated(keep='first')]
+    
+    # We use the ENTIRE test set (not just the last 72h)
+    test_actual = test_df['Price_BE']
+    test_index = test_actual.index.drop_duplicates(keep='first')
+    
+    # Reindex using the unique test index
+    daily_pred = full_prices.shift(24).reindex(test_index)
+    weekly_pred = full_prices.shift(168).reindex(test_index)
+    avg_pred = full_prices.rolling(window=168).mean().shift(1).reindex(test_index)
+    
+    # Align everything and drop NaNs
+    results = pd.DataFrame({
+        'Actual': test_actual[~test_actual.index.duplicated(keep='first')],
+        'Daily': daily_pred,
+        'Weekly': weekly_pred,
+        'Avg': avg_pred
+    }).dropna()
+
+    print("\n--- Standard Baseline Scores (Full Test Set) ---")
+    print(f"Daily Persist -> MSE: {mean_squared_error(results['Actual'], results['Daily']):.4f}")
+    print(f"Weekly Persist -> MSE: {mean_squared_error(results['Actual'], results['Weekly']):.4f}")
+    print(f"Weekly Avg     -> MSE: {mean_squared_error(results['Actual'], results['Avg']):.4f}")
+
 # --- 3. MODEL ARCHITECTURE ---
 
 def build_lstm_model(input_shape, output_steps):
@@ -384,40 +410,28 @@ def plot_detailed_evaluation(model, X_data, y_data_scaled, scaler_y, set_name="V
 
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 
-def calculate_baselines(df, test_df):
-    # Ensure the full price series has a unique index to prevent reindexing errors
-    full_prices = df['Price_BE'][~df.index.duplicated(keep='first')]
+def calculate_global_baselines(df):
+    # Shift values across the entire DataFrame
+    actual = df['Price_BE']
+    daily_pred = df['Price_BE'].shift(24)
+    weekly_pred = df['Price_BE'].shift(168)
+    avg_pred = df['Price_BE'].rolling(window=168).mean().shift(1)
     
-    # We use the ENTIRE test set to match the standard baseline calculation
-    test_actual = test_df['Price_BE']
-    test_index = test_actual.index.drop_duplicates(keep='first')
-    
-    # Reindex using the unique test index
-    daily_pred = full_prices.shift(24).reindex(test_index)
-    weekly_pred = full_prices.shift(168).reindex(test_index)
-    avg_pred = full_prices.rolling(window=168).mean().shift(1).reindex(test_index)
-    
-    # Create a DataFrame to easily drop any remaining NaNs
+    # Drop the first 168 rows which become NaN due to shifting
     results = pd.DataFrame({
-        'Actual': test_actual[~test_actual.index.duplicated(keep='first')],
+        'Actual': actual,
         'Daily': daily_pred,
         'Weekly': weekly_pred,
         'Avg': avg_pred
     }).dropna()
 
-    def get_metrics(true, pred):
-        mse = mean_squared_error(true, pred)
-        mae = mean_absolute_error(true, pred)
-        return mse, mae
+    print("\n--- Global Baseline Scores (Entire Dataset 2021-2026) ---")
+    print(f"Daily Persist -> MSE: {np.mean((results['Actual'] - results['Daily'])**2):.4f}")
+    print(f"Weekly Persist -> MSE: {np.mean((results['Actual'] - results['Weekly'])**2):.4f}")
+    print(f"Weekly Avg     -> MSE: {np.mean((results['Actual'] - results['Avg'])**2):.4f}")
 
-    mse_d, mae_d = get_metrics(results['Actual'], results['Daily'])
-    mse_w, mae_w = get_metrics(results['Actual'], results['Weekly'])
-    mse_a, mae_a = get_metrics(results['Actual'], results['Avg'])
-
-    print("\n--- Standard Baseline Scores (Full Test Set) ---")
-    print(f"Daily persistence 72h -> MSE: {mse_d:.4f}, MAE: {mae_d:.4f}")
-    print(f"Weekly persistence 72h -> MSE: {mse_w:.4f}, MAE: {mae_w:.4f}")
-    print(f"Recent weekly average 72h -> MSE: {mse_a:.4f}, MAE: {mae_a:.4f}")
+# You can call this right after load_and_clean_data(data)
+# calculate_global_baselines(data)
 
 # --- 5. MAIN EXECUTION FLOW ---
 
@@ -457,5 +471,6 @@ test_actual = scaler_y.inverse_transform(y_test)
 test_predicted = scaler_y.inverse_transform(test_preds)
 print(f"--- FINAL 72H TEST MSE: {np.mean((test_actual - test_predicted)**2):.4f} ---")
 
+calculate_global_baselines(data)
 calculate_baselines(data, test)
 print("All tasks complete! Check the 'plots' folder for results.")
