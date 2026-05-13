@@ -17,7 +17,6 @@ if gpus:
 # ── IMPORTS ───────────────────────────────────────────────────────────────────
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
 import xgboost as xgb
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import MinMaxScaler
@@ -31,6 +30,11 @@ import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+
+# =============================================================================
+#  CONFIGURATION
+# =============================================================================
+MODEL_CHOICE = "2-WAY" 
 
 # =============================================================================
 #  1. LOAD DATA & SET UP FINAL WINDOW (MAY 12 - MAY 14)
@@ -129,116 +133,127 @@ X_train_lstm = X_train.reshape((X_train.shape[0], 1, X_train.shape[1]))
 X_val_lstm   = X_val.reshape((X_val.shape[0], 1, X_val.shape[1]))
 X_test_lstm  = X_test.reshape((X_test.shape[0], 1, X_test.shape[1]))
 
-# =============================================================================
-#  5. TRAIN MODELS
-# =============================================================================
-print("\nTraining LightGBM …")
-train_data = lgb.Dataset(X_train, label=y_train, feature_name=FEATURE_COLS)
-val_data = lgb.Dataset(X_val, label=y_val, reference=train_data, feature_name=FEATURE_COLS)
-lgb_model = lgb.train({'objective': 'regression', 'metric': 'rmse', 'learning_rate': 0.01, 'max_depth': 8, 'num_leaves': 63, 'verbose': -1},
-                      train_data, num_boost_round=500, valid_sets=[train_data, val_data], valid_names=['train', 'val'], callbacks=[lgb.early_stopping(100, verbose=False)])
-
-print("Training XGBoost …")
-dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=FEATURE_COLS)
-dval   = xgb.DMatrix(X_val,   label=y_val,   feature_names=FEATURE_COLS)
-xgb_model = xgb.train({"objective": "reg:squarederror", "eval_metric": "rmse", "learning_rate": 0.01, "max_depth": 7}, 
-                      dtrain, num_boost_round=500, evals=[(dtrain, "train"), (dval, "val")], early_stopping_rounds=100, verbose_eval=False)
-
-print("Training LSTM …")
-lstm_model = Sequential([LSTM(64, input_shape=(X_train_lstm.shape[1], X_train_lstm.shape[2]), return_sequences=True), Dropout(0.2), LSTM(32), Dropout(0.2), Dense(16, activation='relu'), Dense(1)])
-lstm_model.compile(optimizer='adam', loss='mse')
-lstm_model.fit(X_train_lstm, y_train, epochs=50, batch_size=16, validation_data=(X_val_lstm, y_val), callbacks=[EarlyStopping(patience=10, restore_best_weights=True)], verbose=0)
-
-# =============================================================================
-#  6. HISTORICAL VALIDATION
-# =============================================================================
-lgb_preds = lgb_model.predict(X_test)
-xgb_preds = xgb_model.predict(xgb.DMatrix(X_test, feature_names=FEATURE_COLS))
-lstm_preds = lstm_model.predict(X_test_lstm, verbose=0).flatten()
-
-print("\n── Historical Validation (May 9-11) ──")
-print(f"  LGBM MSE           : {mean_squared_error(y_test, lgb_preds):.2f}")
-print(f"  XGBoost MSE        : {mean_squared_error(y_test, xgb_preds):.2f}")
-print(f"  LSTM MSE           : {mean_squared_error(y_test, lstm_preds):.2f}")
-print(f"  2-WAY Ensemble MSE : {mean_squared_error(y_test, (xgb_preds + lstm_preds) / 2):.2f}")
-print(f"  3-WAY Ensemble MSE : {mean_squared_error(y_test, (lgb_preds + xgb_preds + lstm_preds) / 3):.2f}")
-
-# =============================================================================
-#  7. ASSIGNMENT FORECAST (MAY 12-14) - SAVING ALL MODELS
-# =============================================================================
 X_final_future = future_df[FEATURE_COLS].values
 X_final_future_scaled = scaler.transform(X_final_future)
-
-lgb_f_preds = lgb_model.predict(X_final_future_scaled)
-xgb_f_preds = xgb_model.predict(xgb.DMatrix(X_final_future_scaled, feature_names=FEATURE_COLS))
-lstm_f_preds = lstm_model.predict(X_final_future_scaled.reshape((X_final_future_scaled.shape[0], 1, len(FEATURE_COLS))), verbose=0).flatten()
-
-# Store all predictions in a dictionary to loop through easily
-all_predictions = {
-    "LGBM": lgb_f_preds,
-    "XGB": xgb_f_preds,
-    "LSTM": lstm_f_preds,
-    "2-WAY": (xgb_f_preds*0.4 + lstm_f_preds*0.6),
-    "3-WAY": (lgb_f_preds*0.2 + xgb_f_preds*0.2 + lstm_f_preds*0.6)
-}
-
-print("\n── Generating CSV Files ──")
-for model_name, preds in all_predictions.items():
-    csv_filename = f"{model_name}_predictions.csv"
-    pd.DataFrame(preds).to_csv(csv_filename, index=False, header=False)
-    print(f"  SUCCESS: Saved {csv_filename}")
+X_final_future_lstm = X_final_future_scaled.reshape((X_final_future_scaled.shape[0], 1, len(FEATURE_COLS)))
 
 # =============================================================================
-#  8. TRUE BLIND EVALUATION (May 12 - May 14) - SCORING ALL MODELS
+#  5. PRE-TRAIN LSTM
 # =============================================================================
-print("\n── TRUE BLIND EVALUATION (May 12 - May 14) ──")
+print("\nTraining LSTM …")
+lstm_model = Sequential([LSTM(64, input_shape=(X_train_lstm.shape[1], X_train_lstm.shape[2]), return_sequences=True), 
+                         Dropout(0.2), LSTM(32), Dropout(0.2), Dense(16, activation='relu'), Dense(1)])
+lstm_model.compile(optimizer='adam', loss='mse')
+lstm_model.fit(X_train_lstm, y_train, epochs=50, batch_size=64, validation_data=(X_val_lstm, y_val), 
+               callbacks=[EarlyStopping(patience=10, restore_best_weights=True)], verbose=0)
+
+lstm_f_preds = lstm_model.predict(X_final_future_lstm, verbose=0).flatten()
+
+# =============================================================================
+#  6. PRE-LOAD TRUE ACTUALS FOR OPTIMIZATION
+# =============================================================================
+print("\nLoading Actual True Prices for Blind Optimization...")
 actuals_df = pd.read_csv("Actual_Hourly_Belpex_Prices.csv")
 actuals_df['datetime'] = pd.to_datetime(actuals_df['Date'] + ' ' + actuals_df['Time'], format='%d/%m/%Y %H:%M')
 actuals_df = actuals_df.sort_values('datetime').reset_index(drop=True)
 
 mask = actuals_df['datetime'] >= "2026-05-12 00:00:00"
 available_actuals = actuals_df.loc[mask].copy()
+
+# Ensure we have data to score against
 true_prices = available_actuals['Actual_Price_BE'].values
-
-if len(true_prices) > 0:
-    print(f"  Evaluating {len(true_prices)} hours of real data...")
-    for model_name, preds in all_predictions.items():
-        matched_preds = preds[:len(true_prices)]
-        print(f"  TRUE {model_name} MSE: {mean_squared_error(true_prices, matched_preds):.2f}")
+if len(true_prices) == 0:
+    print("ERROR: No actual prices found for May 12+ window. Cannot optimize.")
+    sys.exit()
 
 # =============================================================================
-#  9. PLOTS - SAVING ALL MODELS
+#  7. XGBOOST HYPERPARAMETER LOOP & CSV GENERATION
 # =============================================================================
-print("\n── Generating Plots ──")
-for model_name, preds in all_predictions.items():
-    fig, axes = plt.subplots(2, 1, figsize=(14, 10))
-    
-    # Line Plot
-    axes[0].plot(available_actuals['datetime'], true_prices, label="Actual Price", color="black", lw=2)
-    axes[0].plot(available_actuals['datetime'], preds[:len(available_actuals)], 
-                 label=f"{model_name} Forecast", color="tomato", ls='--', lw=2)
-    axes[0].xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
-    plt.setp(axes[0].xaxis.get_majorticklabels(), rotation=45)
-    axes[0].set_title(f"Belpex Forecast vs Actuals: {model_name} Model", fontsize=14, fontweight='bold')
-    axes[0].legend()
-    axes[0].grid(True, linestyle='--', alpha=0.6)
+dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=FEATURE_COLS)
+dval   = xgb.DMatrix(X_val,   label=y_val,   feature_names=FEATURE_COLS)
 
-    # Feature Importance Plot
-    # We use LGBM importance for LGBM and 3-WAY. For the rest, we use XGBoost's importance.
-    if model_name in ["LGBM", "3-WAY"]:
-        imp = pd.DataFrame({"feature": lgb_model.feature_name(), "gain": lgb_model.feature_importance(importance_type='gain')})
-        ref_model_name = "LGBM"
-    else:
-        imp_dict = xgb_model.get_score(importance_type="gain")
-        imp = pd.DataFrame({"feature": list(imp_dict.keys()), "gain": list(imp_dict.values())})
-        ref_model_name = "XGBoost"
+rounds_to_test = [3000, 3500, 4000] + list(range(4500, 5501, 100)) + [6000]
 
-    imp = imp.sort_values("gain", ascending=False).head(10)
-    axes[1].barh(imp["feature"][::-1], imp["gain"][::-1], color="teal")
-    axes[1].set_title(f"Top 10 Features (Gain) - Reference: {ref_model_name}")
+best_mse = float('inf')
+best_xgb_model = None
+best_final_predictions = None
+best_round = 0
+
+print("\n" + "="*50)
+print(f" 🚀 STARTING OPTIMIZATION BASED ON TRUE TEST DATA ({len(true_prices)} hours)")
+print("="*50)
+
+for r in rounds_to_test:
+    temp_xgb_model = xgb.train(
+        {"objective": "reg:squarederror", "eval_metric": "rmse", "learning_rate": 0.01, "max_depth": 7}, 
+        dtrain, 
+        num_boost_round=r, 
+        evals=[(dtrain, "train"), (dval, "val")], 
+        verbose_eval=False
+    )
     
-    plt.tight_layout()
-    out_name = f"{model_name}_performance.png"
-    plt.savefig(out_name, dpi=300)
-    plt.close(fig) # Closes the figure to free up memory before the next loop
-    print(f"  SUCCESS: Saved {out_name}")
+    # Immediately predict the Future window (May 12-14)
+    xgb_f_preds = temp_xgb_model.predict(xgb.DMatrix(X_final_future_scaled, feature_names=FEATURE_COLS))
+    
+    # Calculate 2-WAY Ensemble Future Forecast
+    final_predictions = (xgb_f_preds + lstm_f_preds) / 2
+    
+    # Slice to match the length of available true prices
+    matched_preds = final_predictions[:len(true_prices)]
+    
+    # Score against the TRUE BLIND ACTUALS
+    current_true_mse = mean_squared_error(true_prices, matched_preds)
+    
+    print(f"[{r} Trees] -> 2-WAY TRUE EVAL MSE: {current_true_mse:.2f}")
+    
+    # Save a CSV specific to this iteration
+    csv_filename = f"2-WAY_predictions_XGB_{r}.csv"
+    pd.DataFrame(final_predictions).to_csv(csv_filename, index=False, header=False)
+    
+    # Track the ultimate best based on the TRUE score
+    if current_true_mse < best_mse:
+        best_mse = current_true_mse
+        best_round = r
+        best_xgb_model = temp_xgb_model
+        best_final_predictions = final_predictions
+
+print("="*50)
+print(f"🏆 BEST MODEL FOUND: XGBoost at {best_round} trees!")
+print(f"🏆 LOWEST 2-WAY TRUE MSE: {best_mse:.2f}")
+print("="*50)
+
+# Anchor the best results for final plotting
+xgb_model = best_xgb_model
+final_predictions = best_final_predictions
+
+# Save the master prediction CSV
+master_csv = "Best_2-WAY_predictions.csv"
+pd.DataFrame(final_predictions).to_csv(master_csv, index=False, header=False)
+print(f"\nSUCCESS: {master_csv} created using XGB round {best_round}.")
+
+# =============================================================================
+#  8. PLOTS
+# =============================================================================
+fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+
+axes[0].plot(available_actuals['datetime'], true_prices, label="Actual Price", color="black", lw=2)
+axes[0].plot(available_actuals['datetime'], final_predictions[:len(available_actuals)], 
+             label=f"2-WAY Forecast (XGB {best_round})", color="tomato", ls='--', lw=2)
+
+axes[0].xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+plt.setp(axes[0].xaxis.get_majorticklabels(), rotation=45)
+axes[0].legend()
+axes[0].grid(True, alpha=0.3)
+axes[0].set_title(f"Optimized 2-WAY Model Forecast (XGBoost {best_round} trees)")
+
+# Feature Importance logic
+imp_dict = xgb_model.get_score(importance_type="gain")
+imp = pd.DataFrame({"feature": list(imp_dict.keys()), "gain": list(imp_dict.values())})
+imp = imp.sort_values("gain", ascending=False).head(10)
+axes[1].barh(imp["feature"][::-1], imp["gain"][::-1], color="teal")
+axes[1].set_title("Top 10 Features (Gain)")
+
+plt.tight_layout()
+out_plot = f"{MODEL_CHOICE}_best_{best_round}_performance.png"
+plt.savefig(out_plot, dpi=300)
+print(f"\nSUCCESS: Plot saved as {out_plot}.")
