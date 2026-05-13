@@ -40,7 +40,7 @@ try:
     actual_df = pd.read_csv('Actual_Hourly_Belpex_Prices.csv')
     lgbm_df  = pd.read_csv('LGBM_predictions.csv', header=None)
     xgb_df   = pd.read_csv('XGB_predictions.csv', header=None)
-    lstm_df = pd.read_csv('fTUNED_LSTM_predictions.csv', header= None)
+    lstm_df = pd.read_csv('ffTUNED_LSTM_predictions.csv', header= None)
     ens_df   = pd.read_csv('3-WAY_predictions.csv', header=None)
     ens2_df  = pd.read_csv('2-WAY_predictions.csv', header=None) 
 
@@ -74,7 +74,7 @@ try:
             current_mse = mean_squared_error(actual_prices[:n_eval], preds[:n_eval])
             print(f"  {name:<18} | MSE: {current_mse:.2f}")
     print("="*50 + "\n")
-    
+
     # --- 4. RUN ALIGNMENT OPTIMIZER ---
     best_shifts_found = []
     for name, preds in models.items():

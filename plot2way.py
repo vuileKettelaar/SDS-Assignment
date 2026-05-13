@@ -9,7 +9,7 @@ from sklearn.metrics import mean_squared_error
 try:
     # --- 1. Load data ---
     actual_df = pd.read_csv('Actual_Hourly_Belpex_Prices.csv')
-    ens2_df   = pd.read_csv('VERIFIED_LSTM_predictions.csv', header=None) 
+    ens2_df   = pd.read_csv('FinalCode/finalPrediction.csv', header=None) 
 
     # --- 2. Parse timestamps ---
     actual_df['Timestamp'] = pd.to_datetime(actual_df['Timestamp'])

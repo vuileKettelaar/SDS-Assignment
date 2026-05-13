@@ -16,7 +16,7 @@ try:
     avg7_df    = pd.read_csv('Baseline_7DayAvg_predictions.csv', header=None)
     
     # Your Tuned Model (Make sure the filename perfectly matches what you have!)
-    lstm_df    = pd.read_csv('fTUNED_LSTM_predictions.csv', header=None)
+    lstm_df    = pd.read_csv('ffTUNED_LSTM_predictions.csv', header=None)
 
     # Store them in a dictionary
     models = {
