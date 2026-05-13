@@ -3,65 +3,80 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from scipy.stats import norm
+import matplotlib.dates as mdates
+from sklearn.metrics import mean_squared_error
 
 try:
     # --- 1. Load data ---
     actual_df = pd.read_csv('Actual_Hourly_Belpex_Prices.csv')
-    ens2_df   = pd.read_csv('2-WAY_predictions.csv', header=None) 
+    ens2_df   = pd.read_csv('fTUNED_LSTM_predictions.csv', header=None) 
 
-    # --- 2. Extract values ---
+    # --- 2. Parse timestamps ---
+    actual_df['Timestamp'] = pd.to_datetime(actual_df['Timestamp'])
+    
+    # --- 3. Extract values ---
     ens2_vals = np.array([float(v) for v in ens2_df.iloc[:, 0].values]) 
 
-    # --- 3. Calculate Residuals ---
-    n_eval = min(len(actual_df), len(ens2_vals))
+    # Start predictions from the first timestamp in the actual_df
+    pred_start = actual_df['Timestamp'].iloc[0]
     
+    # Create the timeline for the 2-WAY model
+    preds_timestamps = pd.date_range(start=pred_start, periods=len(ens2_vals), freq='h')
+
+    # Calculate MSE and Residuals for overlapping hours
+    n_eval = min(len(actual_df), len(ens2_vals))
     if n_eval > 0:
         actual_prices = actual_df['Actual_Price_BE'].values[:n_eval]
         pred_prices = ens2_vals[:n_eval]
+        eval_timestamps = actual_df['Timestamp'].iloc[:n_eval]
         
-        # Residuals = Actual - Predicted
+        # Calculate residuals (Actual - Predicted)
         residuals = actual_prices - pred_prices
+        mse = mean_squared_error(actual_prices, pred_prices)
         
-        print(f"Calculating distribution for {n_eval} residuals...")
+        print(f"\nEvaluating on {n_eval} overlapping hours...")
+        print(f"2-WAY (XGB+LSTM) MSE: {mse:.2f}\n")
 
-        # --- 4. Plot Setup ---
-        fig, ax = plt.subplots(figsize=(10, 6))
+    # --- 4. Plot Setup (Two panels) ---
+    # We use gridspec_kw to make the top plot larger than the bottom plot
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 9), sharex=True, gridspec_kw={'height_ratios': [2.5, 1]})
 
-        # Plot 1: The Histogram of your actual residuals
-        # density=True turns the Y-axis into a probability scale so we can draw the curve over it
-        ax.hist(residuals, bins=15, density=True, alpha=0.6, color='purple', edgecolor='black', label='Actual Residual Histogram')
+    # --- TOP PANEL: Prices ---
+    ax1.plot(actual_df['Timestamp'], actual_df['Actual_Price_BE'],
+            label='Actual (May 12+)', color='royalblue', linewidth=2.5)
 
-        # Plot 2: The Theoretical Normal Distribution Curve
-        # This calculates the Mean (mu) and Standard Deviation (std) of your errors
-        mu, std = norm.fit(residuals)
+    ax1.plot(preds_timestamps, ens2_vals,
+            label='2-WAY (XGB+LSTM)', color='purple', linestyle='--', linewidth=2.2)
+
+    ax1.set_title('Actual vs Predicted Hourly Belpex Prices (2-WAY Model)', fontsize=14, fontweight='bold')
+    ax1.set_ylabel('Price (€/MWh)', fontsize=11)
+    ax1.legend(fontsize=12, facecolor='white', framealpha=0.9, loc='upper left')
+    ax1.grid(True, alpha=0.3)
+
+    # --- BOTTOM PANEL: Residuals ---
+    if n_eval > 0:
+        # Plot residuals as a bar chart. Width is adjusted for hourly data.
+        ax2.bar(eval_timestamps, residuals, width=0.03, color='slategray', alpha=0.8, label='Residuals (Actual - Predicted)')
         
-        # Generate the smooth bell curve line
-        xmin, xmax = plt.xlim()
-        x = np.linspace(xmin, xmax, 100)
-        p = norm.pdf(x, mu, std)
+        # Add a zero-line for reference
+        ax2.axhline(0, color='black', linestyle='-', linewidth=1)
         
-        ax.plot(x, p, 'k', linewidth=2.5, label=f'Normal Curve\n(Mean: {mu:.1f}, Std: {std:.1f})')
+    ax2.set_ylabel('Error (€/MWh)', fontsize=11)
+    ax2.legend(fontsize=10, facecolor='white', framealpha=0.9, loc='upper left')
+    ax2.grid(True, alpha=0.3)
 
-        # Plot 3: A red dashed line at EXACTLY 0 error for visual reference
-        ax.axvline(0, color='red', linestyle='dashed', linewidth=2, label='Perfect Prediction (0 Error)')
+    # --- 5. Formatting (Applied to the bottom axis since sharex=True) ---
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%d %b\n%H:%M'))
+    ax2.xaxis.set_major_locator(mdates.HourLocator(interval=12))
+    fig.autofmt_xdate(rotation=0, ha='center')
+    ax2.set_xlabel('Timestamp', fontsize=11)
 
-        # --- 5. Formatting ---
-        ax.set_title('Distribution of 2-WAY Model Errors (Residuals)', fontsize=14, fontweight='bold')
-        ax.set_xlabel('Error Magnitude (€/MWh)', fontsize=12)
-        ax.set_ylabel('Density (Probability)', fontsize=12)
-        
-        ax.legend(fontsize=11, facecolor='white', framealpha=0.9)
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
+    plt.tight_layout()
 
-        # --- 6. Save ---
-        out = 'belpex_residuals_distribution.png'
-        plt.savefig(out, dpi=150)
-        print(f"SUCCESS: Plot saved to {out}")
-
-    else:
-        print("Error: No overlapping hours to calculate residuals.")
+    # --- 6. Save ---
+    out = 'belpex_comparison_2way_with_residuals.png'
+    plt.savefig(out, dpi=150)
+    print(f"Plot saved to: {out}")
 
 except Exception as e:
     import traceback

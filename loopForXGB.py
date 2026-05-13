@@ -42,14 +42,12 @@ DATE_COL   = "Date"
 df_history = pd.read_csv(DATA_PATH, parse_dates=[DATE_COL], dayfirst=True)
 df_history = df_history.sort_values(DATE_COL).reset_index(drop=True)
 
-# Cut training data at the start of the assignment window
 df_history = df_history[df_history[DATE_COL] < "2026-05-11 22:00:00"].copy()
 
 EXOG_COLS = ["Load_FR", "Gen_FR", "Price_CH", "Wind_BE", "Solar_BE", "Load_BE"]
 df_history[EXOG_COLS] = df_history[EXOG_COLS].ffill().bfill()
 df_history["Net_Load_BE"] = df_history["Load_BE"] - df_history["Wind_BE"] - df_history["Solar_BE"]
 
-# Create future dates for the assignment (72 hours)
 future_dates = pd.date_range(start="2026-05-11 22:00:00", periods=72, freq="h")
 df_future = pd.DataFrame({DATE_COL: future_dates})
 
@@ -130,21 +128,47 @@ X_val_lstm   = X_val.reshape((X_val.shape[0], 1, X_val.shape[1]))
 X_test_lstm  = X_test.reshape((X_test.shape[0], 1, X_test.shape[1]))
 
 # =============================================================================
-#  5. TRAIN MODELS
+#  5. TRAIN TUNED MODELS
 # =============================================================================
-print("\nTraining LightGBM …")
+print("\nTraining TUNED LightGBM …")
 train_data = lgb.Dataset(X_train, label=y_train, feature_name=FEATURE_COLS)
 val_data = lgb.Dataset(X_val, label=y_val, reference=train_data, feature_name=FEATURE_COLS)
-lgb_model = lgb.train({'objective': 'regression', 'metric': 'rmse', 'learning_rate': 0.01, 'max_depth': 8, 'num_leaves': 63, 'verbose': -1},
-                      train_data, num_boost_round=500, valid_sets=[train_data, val_data], valid_names=['train', 'val'], callbacks=[lgb.early_stopping(100, verbose=False)])
 
-print("Training XGBoost …")
+lgb_params = {
+    'objective': 'regression',
+    'metric': 'rmse',
+    'learning_rate': 0.01,
+    'max_depth': 6,             # Slightly shallower trees to prevent overfitting
+    'num_leaves': 31,           # Limits tree complexity
+    'feature_fraction': 0.8,    # Uses 80% of features per tree (robustness)
+    'bagging_fraction': 0.8,    # Uses 80% of data per tree
+    'bagging_freq': 1,
+    'min_data_in_leaf': 20,
+    'verbose': -1
+}
+# Increased rounds heavily, relying on early stopping to find the exact perfect point
+lgb_model = lgb.train(lgb_params, train_data, num_boost_round=5000, 
+                      valid_sets=[train_data, val_data], valid_names=['train', 'val'], 
+                      callbacks=[lgb.early_stopping(200, verbose=False)])
+
+print("Training TUNED XGBoost …")
 dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=FEATURE_COLS)
 dval   = xgb.DMatrix(X_val,   label=y_val,   feature_names=FEATURE_COLS)
-xgb_model = xgb.train({"objective": "reg:squarederror", "eval_metric": "rmse", "learning_rate": 0.01, "max_depth": 7}, 
-                      dtrain, num_boost_round=500, evals=[(dtrain, "train"), (dval, "val")], early_stopping_rounds=100, verbose_eval=False)
 
-print("Training LSTM …")
+xgb_params = {
+    "objective": "reg:squarederror", 
+    "eval_metric": "rmse", 
+    "learning_rate": 0.01, 
+    "max_depth": 6, 
+    "min_child_weight": 5,      # Forces conservative splits
+    "subsample": 0.8,           # Stochastic boosting
+    "colsample_bytree": 0.8     # Feature sampling
+}
+xgb_model = xgb.train(xgb_params, dtrain, num_boost_round=5000, 
+                      evals=[(dtrain, "train"), (dval, "val")], 
+                      early_stopping_rounds=200, verbose_eval=False)
+
+print("Training LSTM (Standard) …")
 lstm_model = Sequential([LSTM(64, input_shape=(X_train_lstm.shape[1], X_train_lstm.shape[2]), return_sequences=True), Dropout(0.2), LSTM(32), Dropout(0.2), Dense(16, activation='relu'), Dense(1)])
 lstm_model.compile(optimizer='adam', loss='mse')
 lstm_model.fit(X_train_lstm, y_train, epochs=50, batch_size=16, validation_data=(X_val_lstm, y_val), callbacks=[EarlyStopping(patience=10, restore_best_weights=True)], verbose=0)
@@ -157,11 +181,11 @@ xgb_preds = xgb_model.predict(xgb.DMatrix(X_test, feature_names=FEATURE_COLS))
 lstm_preds = lstm_model.predict(X_test_lstm, verbose=0).flatten()
 
 print("\n── Historical Validation (May 9-11) ──")
-print(f"  LGBM MSE           : {mean_squared_error(y_test, lgb_preds):.2f}")
-print(f"  XGBoost MSE        : {mean_squared_error(y_test, xgb_preds):.2f}")
-print(f"  LSTM MSE           : {mean_squared_error(y_test, lstm_preds):.2f}")
-print(f"  2-WAY Ensemble MSE : {mean_squared_error(y_test, (xgb_preds + lstm_preds) / 2):.2f}")
-print(f"  3-WAY Ensemble MSE : {mean_squared_error(y_test, (lgb_preds + xgb_preds + lstm_preds) / 3):.2f}")
+print(f"  TUNED LGBM MSE           : {mean_squared_error(y_test, lgb_preds):.2f}")
+print(f"  TUNED XGBoost MSE        : {mean_squared_error(y_test, xgb_preds):.2f}")
+print(f"  LSTM MSE                 : {mean_squared_error(y_test, lstm_preds):.2f}")
+print(f"  2-WAY Ensemble MSE       : {mean_squared_error(y_test, (xgb_preds + lstm_preds) / 2):.2f}")
+print(f"  3-WAY Ensemble MSE       : {mean_squared_error(y_test, (lgb_preds + xgb_preds + lstm_preds) / 3):.2f}")
 
 # =============================================================================
 #  7. ASSIGNMENT FORECAST (MAY 12-14) - SAVING ALL MODELS
@@ -173,13 +197,12 @@ lgb_f_preds = lgb_model.predict(X_final_future_scaled)
 xgb_f_preds = xgb_model.predict(xgb.DMatrix(X_final_future_scaled, feature_names=FEATURE_COLS))
 lstm_f_preds = lstm_model.predict(X_final_future_scaled.reshape((X_final_future_scaled.shape[0], 1, len(FEATURE_COLS))), verbose=0).flatten()
 
-# Store all predictions in a dictionary to loop through easily
 all_predictions = {
-    "LGBM": lgb_f_preds,
-    "XGB": xgb_f_preds,
-    "LSTM": lstm_f_preds,
-    "2-WAY": (xgb_f_preds*0.4 + lstm_f_preds*0.6),
-    "3-WAY": (lgb_f_preds*0.2 + xgb_f_preds*0.2 + lstm_f_preds*0.6)
+    "TUNED_LGBM": lgb_f_preds,
+    "TUNED_XGB": xgb_f_preds,
+    "TUNED_LSTM": lstm_f_preds,
+    "TUNED_2-WAY": (xgb_f_preds*0.4 + lstm_f_preds*0.6),
+    "TUNED_3-WAY": (lgb_f_preds*0.2 + xgb_f_preds*0.2 + lstm_f_preds*0.6)
 }
 
 print("\n── Generating CSV Files ──")
@@ -213,7 +236,6 @@ print("\n── Generating Plots ──")
 for model_name, preds in all_predictions.items():
     fig, axes = plt.subplots(2, 1, figsize=(14, 10))
     
-    # Line Plot
     axes[0].plot(available_actuals['datetime'], true_prices, label="Actual Price", color="black", lw=2)
     axes[0].plot(available_actuals['datetime'], preds[:len(available_actuals)], 
                  label=f"{model_name} Forecast", color="tomato", ls='--', lw=2)
@@ -223,9 +245,7 @@ for model_name, preds in all_predictions.items():
     axes[0].legend()
     axes[0].grid(True, linestyle='--', alpha=0.6)
 
-    # Feature Importance Plot
-    # We use LGBM importance for LGBM and 3-WAY. For the rest, we use XGBoost's importance.
-    if model_name in ["LGBM", "3-WAY"]:
+    if model_name in ["TUNED_LGBM", "TUNED_3-WAY"]:
         imp = pd.DataFrame({"feature": lgb_model.feature_name(), "gain": lgb_model.feature_importance(importance_type='gain')})
         ref_model_name = "LGBM"
     else:
@@ -240,5 +260,5 @@ for model_name, preds in all_predictions.items():
     plt.tight_layout()
     out_name = f"{model_name}_performance.png"
     plt.savefig(out_name, dpi=300)
-    plt.close(fig) # Closes the figure to free up memory before the next loop
+    plt.close(fig) 
     print(f"  SUCCESS: Saved {out_name}")
