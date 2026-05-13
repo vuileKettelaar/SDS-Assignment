@@ -171,7 +171,7 @@ xgb_model = xgb.train(xgb_params, dtrain, num_boost_round=5000,
 print("Training LSTM (Standard) …")
 lstm_model = Sequential([LSTM(64, input_shape=(X_train_lstm.shape[1], X_train_lstm.shape[2]), return_sequences=True), Dropout(0.2), LSTM(32), Dropout(0.2), Dense(16, activation='relu'), Dense(1)])
 lstm_model.compile(optimizer='adam', loss='mse')
-lstm_model.fit(X_train_lstm, y_train, epochs=50, batch_size=16, validation_data=(X_val_lstm, y_val), callbacks=[EarlyStopping(patience=10, restore_best_weights=True)], verbose=0)
+lstm_model.fit(X_train_lstm, y_train, epochs=50, batch_size=16, validation_data=(X_val_lstm, y_val), callbacks=[EarlyStopping(patience=10, restore_best_weights=True)], verbose=1)
 
 # =============================================================================
 #  6. HISTORICAL VALIDATION
@@ -262,3 +262,40 @@ for model_name, preds in all_predictions.items():
     plt.savefig(out_name, dpi=300)
     plt.close(fig) 
     print(f"  SUCCESS: Saved {out_name}")
+
+lstm_model.save("best_lstm_model.keras")
+
+# Save the XGBoost model
+xgb_model.save_model("best_xgb_model.json")
+
+# Save the LightGBM model
+lgb_model.save_model("best_lgb_model.txt")
+
+print("\nCHECKPOINT: All models have been saved to the current directory!")
+# =============================================================================
+# 10. RELOAD & VERIFY (FINAL CHECK)
+# =============================================================================
+print("\n── Final Verification: Reloading Saved Model ──")
+
+# Load the model back from the disk
+reloaded_model = tf.keras.models.load_model("best_lstm_model.keras")
+
+# Prepare input (reshape exactly like Section 7)
+X_verify = X_final_future_scaled.reshape((X_final_future_scaled.shape[0], 1, X_final_future_scaled.shape[1]))
+
+# Generate predictions with the reloaded model
+reloaded_preds = reloaded_model.predict(X_verify, verbose=0).flatten()
+
+# Compare with the original "live" predictions
+difference = np.abs(all_predictions["TUNED_LSTM"] - reloaded_preds).sum()
+
+if difference < 1e-5:
+    print("  VERIFICATION SUCCESS: Reloaded model matches live predictions exactly!")
+    print(f"  Reloaded MSE (Blind Test): {mean_squared_error(true_prices, reloaded_preds[:len(true_prices)]):.2f}")
+else:
+    print(f"  VERIFICATION WARNING: Difference of {difference:.6f} detected.")
+    print("  (Minor differences are normal on GPUs, but values should be nearly identical.)")
+
+# Save a separate verification CSV just to be safe
+pd.DataFrame(reloaded_preds).to_csv("VERIFIED_LSTM_predictions.csv", index=False, header=False)
+print("  SUCCESS: VERIFIED_LSTM_predictions.csv saved.")

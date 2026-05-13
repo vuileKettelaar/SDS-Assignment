@@ -1,5 +1,6 @@
 import os
 import sys
+import random
 
 # --- PRE-IMPORT GPU LINKING ---
 venv_base = os.path.dirname(sys.executable)
@@ -31,7 +32,9 @@ import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-
+tf.random.set_seed(42)
+np.random.seed(42)
+random.seed(42)
 # =============================================================================
 #  1. LOAD DATA & SET UP FINAL WINDOW (MAY 12 - MAY 14)
 # =============================================================================
@@ -242,3 +245,13 @@ for model_name, preds in all_predictions.items():
     plt.savefig(out_name, dpi=300)
     plt.close(fig) # Closes the figure to free up memory before the next loop
     print(f"  SUCCESS: Saved {out_name}")
+    # Save the LSTM (The most important one for your 280 MSE!)
+lstm_model.save("best_lstm_model.keras")
+
+# Save the XGBoost model
+xgb_model.save_model("best_xgb_model.json")
+
+# Save the LightGBM model
+lgb_model.save_model("best_lgb_model.txt")
+
+print("\nCHECKPOINT: All models have been saved to the current directory!")

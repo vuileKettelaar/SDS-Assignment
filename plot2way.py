@@ -9,7 +9,7 @@ from sklearn.metrics import mean_squared_error
 try:
     # --- 1. Load data ---
     actual_df = pd.read_csv('Actual_Hourly_Belpex_Prices.csv')
-    ens2_df   = pd.read_csv('fTUNED_LSTM_predictions.csv', header=None) 
+    ens2_df   = pd.read_csv('VERIFIED_LSTM_predictions.csv', header=None) 
 
     # --- 2. Parse timestamps ---
     actual_df['Timestamp'] = pd.to_datetime(actual_df['Timestamp'])
@@ -20,7 +20,7 @@ try:
     # Start predictions from the first timestamp in the actual_df
     pred_start = actual_df['Timestamp'].iloc[0]
     
-    # Create the timeline for the 2-WAY model
+    # Create the timeline for the LSTM model
     preds_timestamps = pd.date_range(start=pred_start, periods=len(ens2_vals), freq='h')
 
     # Calculate MSE and Residuals for overlapping hours
@@ -35,10 +35,9 @@ try:
         mse = mean_squared_error(actual_prices, pred_prices)
         
         print(f"\nEvaluating on {n_eval} overlapping hours...")
-        print(f"2-WAY (XGB+LSTM) MSE: {mse:.2f}\n")
+        print(f"LSTM Model MSE: {mse:.2f}\n")
 
     # --- 4. Plot Setup (Two panels) ---
-    # We use gridspec_kw to make the top plot larger than the bottom plot
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 9), sharex=True, gridspec_kw={'height_ratios': [2.5, 1]})
 
     # --- TOP PANEL: Prices ---
@@ -46,26 +45,23 @@ try:
             label='Actual (May 12+)', color='royalblue', linewidth=2.5)
 
     ax1.plot(preds_timestamps, ens2_vals,
-            label='2-WAY (XGB+LSTM)', color='purple', linestyle='--', linewidth=2.2)
+            label='LSTM Forecast', color='purple', linestyle='--', linewidth=2.2)
 
-    ax1.set_title('Actual vs Predicted Hourly Belpex Prices (2-WAY Model)', fontsize=14, fontweight='bold')
+    ax1.set_title('Actual vs Predicted Hourly Belpex Prices (LSTM Model)', fontsize=14, fontweight='bold')
     ax1.set_ylabel('Price (€/MWh)', fontsize=11)
     ax1.legend(fontsize=12, facecolor='white', framealpha=0.9, loc='upper left')
     ax1.grid(True, alpha=0.3)
 
     # --- BOTTOM PANEL: Residuals ---
     if n_eval > 0:
-        # Plot residuals as a bar chart. Width is adjusted for hourly data.
         ax2.bar(eval_timestamps, residuals, width=0.03, color='slategray', alpha=0.8, label='Residuals (Actual - Predicted)')
-        
-        # Add a zero-line for reference
         ax2.axhline(0, color='black', linestyle='-', linewidth=1)
         
     ax2.set_ylabel('Error (€/MWh)', fontsize=11)
     ax2.legend(fontsize=10, facecolor='white', framealpha=0.9, loc='upper left')
     ax2.grid(True, alpha=0.3)
 
-    # --- 5. Formatting (Applied to the bottom axis since sharex=True) ---
+    # --- 5. Formatting ---
     ax2.xaxis.set_major_formatter(mdates.DateFormatter('%d %b\n%H:%M'))
     ax2.xaxis.set_major_locator(mdates.HourLocator(interval=12))
     fig.autofmt_xdate(rotation=0, ha='center')
@@ -74,7 +70,7 @@ try:
     plt.tight_layout()
 
     # --- 6. Save ---
-    out = 'belpex_comparison_2way_with_residuals.png'
+    out = 'belpex_comparison_lstm_with_residuals.png'
     plt.savefig(out, dpi=150)
     print(f"Plot saved to: {out}")
 
