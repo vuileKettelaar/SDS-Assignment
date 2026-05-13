@@ -36,7 +36,7 @@ import matplotlib.dates as mdates
 #  CONFIGURATION
 # =============================================================================
 # Options: "3-WAY" (Ensemble), "LGBM", or "XGB"
-MODEL_CHOICE = "2-WAY" 
+MODEL_CHOICE = "XGB" 
 
 # =============================================================================
 #  1. LOAD DATA & SET UP FINAL WINDOW (MAY 12 - MAY 14)
@@ -49,14 +49,14 @@ df_history = pd.read_csv(DATA_PATH, parse_dates=[DATE_COL], dayfirst=True)
 df_history = df_history.sort_values(DATE_COL).reset_index(drop=True)
 
 # Cut training data at the start of the assignment window
-df_history = df_history[df_history[DATE_COL] < "2026-05-12 00:00:00"].copy()
+df_history = df_history[df_history[DATE_COL] < "2026-05-11 22:00:00"].copy()
 
 EXOG_COLS = ["Load_FR", "Gen_FR", "Price_CH", "Wind_BE", "Solar_BE", "Load_BE"]
 df_history[EXOG_COLS] = df_history[EXOG_COLS].ffill().bfill()
 df_history["Net_Load_BE"] = df_history["Load_BE"] - df_history["Wind_BE"] - df_history["Solar_BE"]
 
 # Create future dates for the assignment (72 hours)
-future_dates = pd.date_range(start="2026-05-12 00:00:00", periods=72, freq="h")
+future_dates = pd.date_range(start="2026-05-11 22:00:00", periods=72, freq="h")
 df_future = pd.DataFrame({DATE_COL: future_dates})
 
 df = pd.concat([df_history, df_future], ignore_index=True)
@@ -68,11 +68,14 @@ df["hour"]        = df[DATE_COL].dt.hour
 df["day_of_week"] = df[DATE_COL].dt.dayofweek   
 df["is_weekend"]  = (df["day_of_week"] >= 5).astype(int)
 df["hour_weekend_interaction"] = df["hour"] * df["is_weekend"]
+df["month"] = df[DATE_COL].dt.month
 
 df["hour_sin"]  = np.sin(2 * np.pi * df["hour"] / 24)
 df["hour_cos"]  = np.cos(2 * np.pi * df["hour"] / 24)
 df["dow_sin"]   = np.sin(2 * np.pi * df["day_of_week"] / 7)
 df["dow_cos"]   = np.cos(2 * np.pi * df["day_of_week"] / 7)
+df["month_sin"]   = np.sin(2 * np.pi * df["month"] / 12)
+df["month_cos"]   = np.cos(2 * np.pi * df["month"] / 12)
 
 for lag in [72, 96, 168, 192]:
     df[f"Price_BE_lag{lag}"] = df[TARGET_COL].shift(lag)
@@ -94,7 +97,7 @@ for col in EXOG_COLS + ["Net_Load_BE"]:
 #  3. SPLIT & SCALE
 # =============================================================================
 FEATURE_COLS = [
-    "hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_weekend", "hour_weekend_interaction",
+    "hour_sin", "hour_cos", "dow_sin", "dow_cos", "month_sin", "month_cos", "is_weekend", "hour_weekend_interaction",
     "Price_BE_lag72", "Price_BE_lag96", "Price_BE_lag168",
     "Price_Velocity_72_vs_96", "Price_Velocity_168_vs_192", 
     "Price_BE_roll72_mean", "Price_BE_roll168_mean",
@@ -103,8 +106,8 @@ FEATURE_COLS = [
   + [f"{col}_Velocity_72_vs_96" for col in EXOG_COLS + ["Net_Load_BE"]] \
   + [f"{col}_roll168_mean" for col in EXOG_COLS + ["Net_Load_BE"]]
 
-train_df = df[df[DATE_COL] < "2026-05-12 00:00:00"].copy()
-future_df = df[df[DATE_COL] >= "2026-05-12 00:00:00"].copy()
+train_df = df[df[DATE_COL] < "2026-05-11 22:00:00"].copy()
+future_df = df[df[DATE_COL] >= "2026-05-11 22:00:00"].copy()
 
 train_df.dropna(subset=FEATURE_COLS + [TARGET_COL], inplace=True)
 train_df.reset_index(drop=True, inplace=True)
@@ -175,7 +178,7 @@ X_final_future_scaled = scaler.transform(X_final_future)
 
 lgb_f_preds = lgb_model.predict(X_final_future_scaled)
 xgb_f_preds = xgb_model.predict(xgb.DMatrix(X_final_future_scaled, feature_names=FEATURE_COLS))
-lstm_f_preds = lstm_model.predict(X_final_future_scaled.reshape((72, 1, len(FEATURE_COLS))), verbose=0).flatten()
+lstm_f_preds = lstm_model.predict(X_final_future_scaled.reshape((X_final_future_scaled.shape[0], 1, len(FEATURE_COLS))), verbose=0).flatten()
 
 # New logic to handle the 2-WAY choice
 if MODEL_CHOICE == "LGBM": 
